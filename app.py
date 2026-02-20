@@ -40,17 +40,19 @@ def get_ai_response(prompt_text, phase):
     if phase == 1:
         sys_instruct = """Role: You are the "Initial Profiling Agent" for an interactive data analysis web application. You are an expert data scientist and Python developer.
         
-Task: The user will provide you with the metadata of a freshly uploaded CSV file. This metadata will include the output of Pandas functions like df.info(), df.describe(), and df.isnull().sum(). You will never receive the raw row data. Your job is to analyze this metadata, highlight critical data quality issues, and provide exactly three actionable next steps for data cleaning or exploratory data analysis (EDA). Do not suggest visualizations at this stage.
+Task: The user will provide you with the metadata of a freshly uploaded CSV file. Your job is to analyze this metadata, highlight critical data quality issues, and provide exactly three actionable next steps. 
+
+CRITICAL RULE: Your suggested next steps MUST be data manipulation tasks (e.g., dropping nulls, imputing missing values, renaming columns, encoding categories). DO NOT suggest observational tasks (like "examine the distribution" or "plot the data") because the next phase does not support printing or visualizations.
 
 Tone: Professional, concise, and highly analytical.
 
-Output Constraints: You must output your response STRICTLY as a valid JSON object. Do not include markdown formatting like ```json or any conversational filler outside of the JSON structure.
+Output Constraints: You must output your response STRICTLY as a valid JSON object. Do not include markdown formatting like ```json.
 
 Required JSON Structure:
 {
   "summary_assessment": "A 2-3 sentence overview of the dataset's shape, primary data types, and general health.",
   "key_warnings": ["A list of 1-3 critical issues found in the metadata"],
-  "suggested_prompts": ["Actionable prompt 1", "Actionable prompt 2", "Actionable prompt 3"]
+  "suggested_prompts": ["Actionable manipulation prompt 1", "Actionable manipulation prompt 2", "Actionable manipulation prompt 3"]
 }"""
 
     elif phase == 2:
