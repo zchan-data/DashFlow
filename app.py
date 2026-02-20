@@ -42,7 +42,7 @@ def get_ai_response(prompt_text, phase):
         
 Task: The user will provide you with the metadata of a freshly uploaded CSV file. Your job is to analyze this metadata, highlight critical data quality issues, and provide exactly three actionable next steps. 
 
-CRITICAL RULE: Your suggested next steps MUST be data manipulation tasks (e.g., dropping nulls, imputing missing values, renaming columns, encoding categories). DO NOT suggest observational tasks.
+CRITICAL RULE: Your suggested next steps MUST be data manipulation tasks (e.g., dropping nulls, changing data types, imputing missing values, renaming columns, encoding categories). DO NOT suggest observational tasks.
 
 Tone: Professional, concise, and highly analytical.
 Output Constraints: Output STRICTLY as a valid JSON object.
@@ -104,36 +104,45 @@ Required JSON Structure:
     # We remove the rigid JSON generation_config to allow our custom parser to handle errors safely
     response = phase_model.generate_content(prompt_text)
 
-    # --- BULLETPROOF PARSER ---
-    # 1. Safely extract text to avoid the 'Part' error
+    # --- SAFELY PARSE JSON ---
     try:
         raw_text = response.text
+
+        # --- TERMINAL DEBUGGER ---
+        # This prints to your local terminal so you can see the raw string if the app crashes
+        print(f"\n--- RAW AI RESPONSE (PHASE {phase}) ---")
+        print(raw_text)
+        print("--------------------------------------\n")
+
+        return json.loads(raw_text)
+
     except ValueError:
-        raise ValueError(
-            "The AI generated a blank response due to a formatting error. Please try clicking the suggestion again or rephrasing."
+        reason = (
+            response.candidates[0].finish_reason.name
+            if response.candidates
+            else "UNKNOWN"
         )
-
-    # 2. Clean up any markdown hallucinated by the AI
-    cleaned_text = raw_text.strip()
-    if cleaned_text.startswith("```json"):
-        cleaned_text = cleaned_text[7:]
-    elif cleaned_text.startswith("```"):
-        cleaned_text = cleaned_text[3:]
-
-    if cleaned_text.endswith("```"):
-        cleaned_text = cleaned_text[:-3]
-
-    # 3. Parse the clean string into a Python dictionary
-    try:
-        return json.loads(cleaned_text.strip())
-    except json.JSONDecodeError as e:
         raise ValueError(
-            f"The AI generated invalid code formatting that couldn't be parsed. Error: {e}"
+            f"The AI returned a blank response (Finish Reason: {reason}). Try clicking the suggestion again."
+        )
+    except json.JSONDecodeError as e:
+        # We now print the exact line where the JSON broke in the UI error message
+        raise ValueError(
+            f"The AI generated corrupted JSON (Error: {e}). Please try again."
         )
 
 
 # --- 4. Main Application UI ---
 st.title("AI Data Analyst")
+
+# --- DEBUG MODE TOGGLE ---
+with st.sidebar:
+    st.header("⚙️ Settings")
+    debug_mode = st.checkbox("Enable Debug Mode", value=False)
+    if debug_mode:
+        st.info(
+            "Debug mode is ON. Raw AI JSON outputs will be displayed below the chat."
+        )
 
 # ==========================================
 # PHASE 1: UPLOAD & PROFILE
@@ -261,6 +270,11 @@ elif st.session_state.current_phase == 2:
                 code_to_run = ai_response["python_code"]
                 explanation = ai_response["explanation_for_user"]
 
+                # --- INJECT DEBUGGER HERE ---
+                if debug_mode:
+                    with st.expander("🔍 DEBUG: View Raw JSON Response", expanded=True):
+                        st.json(ai_response)
+
                 # Update suggestions with the new ones from the AI
                 st.session_state.current_suggestions = ai_response.get(
                     "suggested_next_steps", []
@@ -346,6 +360,11 @@ elif st.session_state.current_phase == 3:
                 ai_response = get_ai_response(full_prompt, phase=3)
                 code_to_run = ai_response["python_code"]
                 explanation = ai_response["explanation_for_user"]
+
+                # --- INJECT DEBUGGER HERE ---
+                if debug_mode:
+                    with st.expander("🔍 DEBUG: View Raw JSON Response", expanded=True):
+                        st.json(ai_response)
 
                 # Update suggestions with the new "tweaks" from the AI
                 st.session_state.current_viz_suggestions = ai_response.get(
