@@ -42,15 +42,14 @@ def get_ai_response(prompt_text, phase):
         
 Task: The user will provide you with the metadata of a freshly uploaded CSV file. Your job is to analyze this metadata, highlight critical data quality issues, and provide exactly three actionable next steps. 
 
-CRITICAL RULE: Your suggested next steps MUST be data manipulation tasks (e.g., dropping nulls, imputing missing values, renaming columns, encoding categories). DO NOT suggest observational tasks (like "examine the distribution" or "plot the data") because the next phase does not support printing or visualizations.
+CRITICAL RULE: Your suggested next steps MUST be data manipulation tasks (e.g., dropping nulls, imputing missing values, renaming columns, encoding categories). DO NOT suggest observational tasks.
 
 Tone: Professional, concise, and highly analytical.
-
-Output Constraints: You must output your response STRICTLY as a valid JSON object. Do not include markdown formatting like ```json.
+Output Constraints: Output STRICTLY as a valid JSON object.
 
 Required JSON Structure:
 {
-  "summary_assessment": "A 2-3 sentence overview of the dataset's shape, primary data types, and general health.",
+  "summary_assessment": "A 2-3 sentence overview of the dataset's health.",
   "key_warnings": ["A list of 1-3 critical issues found in the metadata"],
   "suggested_prompts": ["Actionable manipulation prompt 1", "Actionable manipulation prompt 2", "Actionable manipulation prompt 3"]
 }"""
@@ -63,10 +62,12 @@ Context: You will receive the user's prompt along with the current columns and d
 Rules for Code Generation:
 1. Assume the active dataframe is already loaded into a variable named df.
 2. Your code must modify df directly or create necessary intermediate variables.
-3. Do not include commands to read or load data (like pd.read_csv()).
-4. Do not include print() statements. The application backend will handle displaying the updated df.
+3. If the user asks for a summary or to "examine" something, overwrite the 'df' variable with that summary dataframe (e.g., df = df.describe()) so it can be viewed.
+4. Do not include commands to read or load data.
+5. Do not include print() statements. 
+6. CRITICAL STRING RULE: You MUST use single quotes ('') for all strings inside your Python code (e.g., df['column_name']). Using double quotes will corrupt the JSON output.
 
-Output Constraints: You must output your response STRICTLY as a valid JSON object. Do not include markdown formatting like ```json or any conversational filler outside of the JSON structure.
+Output Constraints: Output STRICTLY as a valid JSON object.
 
 Required JSON Structure:
 {
@@ -79,35 +80,56 @@ Required JSON Structure:
     else:
         sys_instruct = """Role: You are the "Visualization Agent" for an interactive data analysis web application. Your job is to translate the user's data visualization requests into executable Python code using the plotly.express or plotly.graph_objects libraries.
 
-Context: You will receive the user's prompt along with the current columns and data types of the active dataframe.
-
 Rules for Code Generation:
 1. Assume the active dataframe is already loaded into a variable named df.
-2. Always import the necessary Plotly modules within the code block (e.g., import plotly.express as px).
+2. Always import the necessary Plotly modules within the code block.
 3. Your code must generate a Plotly figure and assign it to a variable named fig.
 4. Do not include commands to show the plot (like fig.show()).
-5. Ensure the charts are aesthetically pleasing.
+5. CRITICAL STRING RULE: You MUST use single quotes ('') for all strings inside your Python code. Using double quotes will corrupt the JSON output.
 
-Output Constraints: You must output your response STRICTLY as a valid JSON object. Do not include markdown formatting like ```json or any conversational filler outside of the JSON structure.
+Output Constraints: Output STRICTLY as a valid JSON object.
 
 Required JSON Structure:
 {
-  "thought_process": "A 1-sentence internal reasoning of why this specific chart type is best.",
-  "python_code": "The raw, executable Python code string. Remember to assign the final chart to a variable named 'fig'.",
+  "thought_process": "A 1-sentence internal reasoning of why this chart type is best.",
+  "python_code": "The raw, executable Python code string. Remember to assign to 'fig'.",
   "explanation_for_user": "A brief explanation of what the chart illustrates.",
-  "suggested_tweaks": ["Clickable prompt to modify the chart", "Clickable prompt to drill down further"]
+  "suggested_tweaks": ["Clickable prompt to modify", "Clickable prompt to drill down"]
 }"""
 
-    # We use gemini-2.5-flash as updated previously
     phase_model = genai.GenerativeModel(
         "gemini-2.5-flash", system_instruction=sys_instruct
     )
 
-    # We ask for JSON specifically to ensure clean parsing
-    response = phase_model.generate_content(
-        prompt_text, generation_config={"response_mime_type": "application/json"}
-    )
-    return json.loads(response.text)
+    # We remove the rigid JSON generation_config to allow our custom parser to handle errors safely
+    response = phase_model.generate_content(prompt_text)
+
+    # --- BULLETPROOF PARSER ---
+    # 1. Safely extract text to avoid the 'Part' error
+    try:
+        raw_text = response.text
+    except ValueError:
+        raise ValueError(
+            "The AI generated a blank response due to a formatting error. Please try clicking the suggestion again or rephrasing."
+        )
+
+    # 2. Clean up any markdown hallucinated by the AI
+    cleaned_text = raw_text.strip()
+    if cleaned_text.startswith("```json"):
+        cleaned_text = cleaned_text[7:]
+    elif cleaned_text.startswith("```"):
+        cleaned_text = cleaned_text[3:]
+
+    if cleaned_text.endswith("```"):
+        cleaned_text = cleaned_text[:-3]
+
+    # 3. Parse the clean string into a Python dictionary
+    try:
+        return json.loads(cleaned_text.strip())
+    except json.JSONDecodeError as e:
+        raise ValueError(
+            f"The AI generated invalid code formatting that couldn't be parsed. Error: {e}"
+        )
 
 
 # --- 4. Main Application UI ---
