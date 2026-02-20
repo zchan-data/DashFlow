@@ -9,9 +9,9 @@ import streamlit as st
 # Pulls the API key securely from .streamlit/secrets.toml
 genai.configure(api_key=st.secrets["GOOGLE_API_KEY"])
 
-# Initialize the Gemini model (1.5 Flash is fast and cheap for this)
+# Initialize the Gemini model (2.5 Flash is fast and cheap for this)
 # You will update the system_instruction in the actual helper function below based on the phase.
-model = genai.GenerativeModel("gemini-1.5-flash")
+model = genai.GenerativeModel("gemini-2.5-flash")
 
 # --- 2. Session State Initialization ---
 if "df" not in st.session_state:
@@ -39,7 +39,7 @@ def get_ai_response(prompt_text, phase):
         sys_instruct = """You are the Visualization Agent. Output JSON only... (Paste full Phase 3 prompt here)"""
 
     phase_model = genai.GenerativeModel(
-        "gemini-1.5-flash", system_instruction=sys_instruct
+        "gemini-2.5-flash", system_instruction=sys_instruct
     )
 
     # We ask for JSON specifically to ensure clean parsing
