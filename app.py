@@ -109,14 +109,30 @@ Required JSON Structure:
         raw_text = response.text
 
         # --- TERMINAL DEBUGGER ---
-        # This prints to your local terminal so you can see the raw string if the app crashes
         print(f"\n--- RAW AI RESPONSE (PHASE {phase}) ---")
         print(raw_text)
         print("--------------------------------------\n")
 
-        return json.loads(raw_text)
+        # 1. Clean up any markdown hallucinated by the AI
+        cleaned_text = raw_text.strip()
+        if cleaned_text.startswith("```json"):
+            cleaned_text = cleaned_text[7:]
+        elif cleaned_text.startswith("```"):
+            cleaned_text = cleaned_text[3:]
 
+        if cleaned_text.endswith("```"):
+            cleaned_text = cleaned_text[:-3]
+
+        # 2. Parse the clean string into a Python dictionary
+        return json.loads(cleaned_text.strip())
+
+    except json.JSONDecodeError as e:
+        # This MUST come before ValueError so it catches formatting bugs correctly
+        raise ValueError(
+            f"The AI generated corrupted JSON (Error: {e}). Please try again."
+        )
     except ValueError:
+        # This catches actual blank responses from safety filters or API limits
         reason = (
             response.candidates[0].finish_reason.name
             if response.candidates
@@ -124,11 +140,6 @@ Required JSON Structure:
         )
         raise ValueError(
             f"The AI returned a blank response (Finish Reason: {reason}). Try clicking the suggestion again."
-        )
-    except json.JSONDecodeError as e:
-        # We now print the exact line where the JSON broke in the UI error message
-        raise ValueError(
-            f"The AI generated corrupted JSON (Error: {e}). Please try again."
         )
 
 
