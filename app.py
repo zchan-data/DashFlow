@@ -24,6 +24,13 @@ if "cleaning_chat" not in st.session_state:
     st.session_state.cleaning_chat = []
 if "viz_chat" not in st.session_state:
     st.session_state.viz_chat = []
+if "current_suggestions" not in st.session_state:
+    st.session_state.current_suggestions = []
+if "current_viz_suggestions" not in st.session_state:
+    st.session_state.current_viz_suggestions = [
+        "Show me a correlation heatmap of all numeric columns.",
+        "Create a histogram of the most interesting feature.",
+    ]
 
 
 # --- 3. Helper Function: Call Gemini ---
@@ -33,7 +40,7 @@ def get_ai_response(prompt_text, phase):
     if phase == 1:
         sys_instruct = """Role: You are the "Initial Profiling Agent" for an interactive data analysis web application. You are an expert data scientist and Python developer.
         
-Task: The user will provide you with the metadata of a freshly uploaded CSV file. This metadata will include the output of Pandas functions like df.info(), df.describe(), and df.isnull().sum(). You will never receive the raw row data. Your job is to analyze this metadata, highlight critical data quality issues, and provide exactly three actionable next steps for data cleaning or exploratory data analysis (EDA).
+Task: The user will provide you with the metadata of a freshly uploaded CSV file. This metadata will include the output of Pandas functions like df.info(), df.describe(), and df.isnull().sum(). You will never receive the raw row data. Your job is to analyze this metadata, highlight critical data quality issues, and provide exactly three actionable next steps for data cleaning or exploratory data analysis (EDA). Do not suggest visualizations at this stage.
 
 Tone: Professional, concise, and highly analytical.
 
@@ -135,6 +142,9 @@ if st.session_state.current_phase == 1:
                     profile_json = get_ai_response(
                         f"Here is the metadata: {metadata}", phase=1
                     )
+                    st.session_state.current_suggestions = profile_json.get(
+                        "suggested_prompts", []
+                    )
                     st.subheader("AI Assessment")
                     st.write(
                         profile_json.get("summary_assessment", "Analysis complete.")
@@ -161,8 +171,31 @@ if st.session_state.current_phase == 1:
 elif st.session_state.current_phase == 2:
     st.header("Step 2: Clean & Explore")
 
+    # 1. Top Navigation & Actions
+    col1, col2, col3 = st.columns([1, 1, 1])
+    with col1:
+        if st.button("⬅️ Back to Step 1 (Upload)"):
+            st.session_state.current_phase = 1
+            st.rerun()
+    with col2:
+        if st.button("🔴 Revert to Original", use_container_width=True):
+            st.session_state.df = st.session_state.raw_df.copy()
+            st.session_state.cleaning_chat.append(
+                {"role": "ai", "content": "🔄 Reverted to original data."}
+            )
+            st.session_state.current_suggestions = []  # Clear suggestions on revert
+            st.rerun()
+    with col3:
+        if st.button(
+            "🔵 Move to Visualization", type="primary", use_container_width=True
+        ):
+            st.session_state.current_phase = 3
+            st.rerun()
+
+    st.divider()
+
     # Show current data state
-    with st.expander("View Current Dataframe"):
+    with st.expander("View Current Dataframe", expanded=True):
         st.dataframe(st.session_state.df.head())
 
     # Render chat history
@@ -173,22 +206,41 @@ elif st.session_state.current_phase == 2:
                 with st.expander("Show Executed Code"):
                     st.code(message["code"], language="python")
 
-    # Handle new chat input
-    if prompt := st.chat_input(
+    # 2. Render Suggestions as Buttons
+    user_prompt = None
+    if st.session_state.current_suggestions:
+        st.caption("✨ **Suggested Next Steps:**")
+        sugg_cols = st.columns(len(st.session_state.current_suggestions))
+        for i, suggestion in enumerate(st.session_state.current_suggestions):
+            # If a suggestion button is clicked, assign it to user_prompt
+            if sugg_cols[i].button(suggestion, key=f"sugg_{i}"):
+                user_prompt = suggestion
+
+    # 3. Handle Chat Input
+    # If the user types in the bar, it overrides the button clicks
+    if chat_input := st.chat_input(
         "Ask the AI to clean, filter, or manipulate the data..."
     ):
-        st.chat_message("user").markdown(prompt)
-        st.session_state.cleaning_chat.append({"role": "user", "content": prompt})
+        user_prompt = chat_input
 
-        # Prepare context for AI
+    # 4. Execute AI Logic (Triggers if either a button was clicked or text was typed)
+    if user_prompt:
+        st.chat_message("user").markdown(user_prompt)
+        st.session_state.cleaning_chat.append({"role": "user", "content": user_prompt})
+
         schema_context = f"Columns: {st.session_state.df.columns.tolist()}\nTypes: {st.session_state.df.dtypes.to_dict()}"
-        full_prompt = f"Context: {schema_context}\nUser Request: {prompt}"
+        full_prompt = f"Context: {schema_context}\nUser Request: {user_prompt}"
 
         with st.spinner("Writing and executing Pandas code..."):
             try:
                 ai_response = get_ai_response(full_prompt, phase=2)
                 code_to_run = ai_response["python_code"]
                 explanation = ai_response["explanation_for_user"]
+
+                # Update suggestions with the new ones from the AI
+                st.session_state.current_suggestions = ai_response.get(
+                    "suggested_next_steps", []
+                )
 
                 # Execute the code safely
                 local_vars = {"df": st.session_state.df.copy(), "pd": pd}
@@ -197,35 +249,15 @@ elif st.session_state.current_phase == 2:
                 # Update state
                 st.session_state.df = local_vars["df"]
 
-                # Display AI reply
-                with st.chat_message("ai"):
-                    st.markdown(explanation)
-                    with st.expander("Show Executed Code"):
-                        st.code(code_to_run, language="python")
-
                 # Save to history
                 st.session_state.cleaning_chat.append(
                     {"role": "ai", "content": explanation, "code": code_to_run}
                 )
-                st.rerun()
+                st.rerun()  # Refresh to show new dataframe, new chat, and new suggestions
 
             except Exception as e:
                 st.error(f"Execution failed: {e}")
 
-    # Navigation
-    st.divider()
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("Revert to Original Upload"):
-            st.session_state.df = st.session_state.raw_df.copy()
-            st.session_state.cleaning_chat.append(
-                {"role": "ai", "content": "🔄 Reverted to original data."}
-            )
-            st.rerun()
-    with col2:
-        if st.button("Move to Visualization (Phase 3)"):
-            st.session_state.current_phase = 3
-            st.rerun()
 
 # ==========================================
 # PHASE 3: VISUALIZATION LOOP
@@ -233,7 +265,24 @@ elif st.session_state.current_phase == 2:
 elif st.session_state.current_phase == 3:
     st.header("Step 3: Visualize Data")
 
-    # Render visualization chat history
+    # 1. Top Navigation & Actions
+    col1, col2 = st.columns([1, 1])
+    with col1:
+        if st.button("⬅️ Back to Step 2 (Cleaning)"):
+            st.session_state.current_phase = 2
+            st.rerun()
+    with col2:
+        if st.button("🗑️ Clear Visualizations", use_container_width=True):
+            st.session_state.viz_chat = []
+            st.session_state.current_viz_suggestions = [
+                "Show me a correlation heatmap of all numeric columns.",
+                "Create a histogram of the most interesting feature.",
+            ]
+            st.rerun()
+
+    st.divider()
+
+    # Render visualization chat history and plots
     for message in st.session_state.viz_chat:
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
@@ -243,19 +292,41 @@ elif st.session_state.current_phase == 3:
                 with st.expander("Show Plotly Code"):
                     st.code(message["code"], language="python")
 
-    # Handle new chat input
-    if prompt := st.chat_input("Ask the AI to generate a Plotly chart..."):
-        st.chat_message("user").markdown(prompt)
-        st.session_state.viz_chat.append({"role": "user", "content": prompt})
+    # 2. Render Suggestions as Buttons
+    user_prompt = None
+    if st.session_state.current_viz_suggestions:
+        st.caption("🎨 **Suggested Visualizations & Tweaks:**")
+        # Handle dynamic column sizing based on the number of suggestions
+        sugg_cols = st.columns(len(st.session_state.current_viz_suggestions))
+        for i, suggestion in enumerate(st.session_state.current_viz_suggestions):
+            if sugg_cols[i].button(suggestion, key=f"viz_sugg_{i}"):
+                user_prompt = suggestion
+
+    # 3. Handle Chat Input
+    # If the user types in the bar, it overrides the button clicks
+    if chat_input := st.chat_input(
+        "Ask the AI to generate or modify a Plotly chart..."
+    ):
+        user_prompt = chat_input
+
+    # 4. Execute AI Logic (Triggers if either a button was clicked or text was typed)
+    if user_prompt:
+        st.chat_message("user").markdown(user_prompt)
+        st.session_state.viz_chat.append({"role": "user", "content": user_prompt})
 
         schema_context = f"Columns: {st.session_state.df.columns.tolist()}\nTypes: {st.session_state.df.dtypes.to_dict()}"
-        full_prompt = f"Context: {schema_context}\nUser Request: {prompt}"
+        full_prompt = f"Context: {schema_context}\nUser Request: {user_prompt}"
 
         with st.spinner("Generating chart..."):
             try:
                 ai_response = get_ai_response(full_prompt, phase=3)
                 code_to_run = ai_response["python_code"]
                 explanation = ai_response["explanation_for_user"]
+
+                # Update suggestions with the new "tweaks" from the AI
+                st.session_state.current_viz_suggestions = ai_response.get(
+                    "suggested_tweaks", []
+                )
 
                 # Execute the code to extract 'fig'
                 local_vars = {"df": st.session_state.df, "px": px}
@@ -264,13 +335,7 @@ elif st.session_state.current_phase == 3:
                 if "fig" in local_vars:
                     fig = local_vars["fig"]
 
-                    with st.chat_message("ai"):
-                        st.markdown(explanation)
-                        st.plotly_chart(fig, use_container_width=True)
-                        with st.expander("Show Plotly Code"):
-                            st.code(code_to_run, language="python")
-
-                    # Save to history
+                    # Save everything to history and rerun
                     st.session_state.viz_chat.append(
                         {
                             "role": "ai",
@@ -279,14 +344,9 @@ elif st.session_state.current_phase == 3:
                             "fig": fig,
                         }
                     )
+                    st.rerun()
                 else:
                     st.error("AI code did not generate a 'fig' variable.")
 
             except Exception as e:
                 st.error(f"Visualization failed: {e}")
-
-    # Navigation
-    st.divider()
-    if st.button("Back to Data Cleaning (Phase 2)"):
-        st.session_state.current_phase = 2
-        st.rerun()
